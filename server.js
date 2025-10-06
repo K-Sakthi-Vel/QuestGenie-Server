@@ -3,7 +3,7 @@
  * Node/Express backend for PDF -> Text -> Claude QG (MCQ, SAQ, LAQ)
  * Usage:
  * npm install
- * cp .env.example .env   (fill HF_API_TOKEN)
+ * cp .env.example .env   (fill AI_API_TOKEN)
  * npm run start
  *
  * Endpoints:
@@ -22,12 +22,12 @@ const dotenv = require("dotenv");
 const { v4: uuidv4 } = require("uuid");
 dotenv.config();
 
-const HF_API_TOKEN = process.env.HF_API_TOKEN;
-if (!HF_API_TOKEN) {
-  console.error("Missing HF_API_TOKEN in environment. See .env.example");
+const AI_API_TOKEN = process.env.AI_API_TOKEN;
+if (!AI_API_TOKEN) {
+  console.error("Missing AI_API_TOKEN in environment. See .env.example");
   process.exit(1);
 }
-console.log("Using HF_API_TOKEN:", HF_API_TOKEN);
+console.log("Using AI_API_TOKEN:", AI_API_TOKEN);
 
 const PORT = process.env.PORT || 5000;
 const app = express();
@@ -140,7 +140,7 @@ async function callClaudeModel(prompt, maxTokens = 500) {
   const url = "https://openrouter.ai/api/v1/chat/completions";
   const headers = {
     "Content-Type": "application/json",
-    "Authorization": `Bearer ${HF_API_TOKEN}`
+    "Authorization": `Bearer ${AI_API_TOKEN}`
   };
   const body = {
     model: "anthropic/claude-sonnet-4.5",
