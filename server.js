@@ -1,46 +1,46 @@
-/** 
+/**
  * server.js
- * Node/Express backend for PDF -> Text -> Claude QG (MCQ, SAQ, LAQ)
- * Usage:
- * npm install
- * cp .env.example .env   (fill AI_API_TOKEN)
- * npm run start
- *
- * Endpoints:
- * POST /api/upload  (multipart form, field "file")
- * GET  /api/result/:jobId
+ * Node/Express backend for PDF -> Text -> Gemini QG (MCQ, SAQ, LAQ)
+ * Updated: batch MCQs (1 call for 4 MCQs) + parallel SAQ/LAQ (limited concurrency).
  */
 
 const express = require("express");
 const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+if (typeof global.DOMMatrix === 'undefined') {
+  global.DOMMatrix = class DOMMatrix { constructor(){} multiply(){return this} translate(){return this} scale(){return this} toFloat32Array(){return new Float32Array(6)} };
+}
+if (typeof global.ImageData === 'undefined') {
+  global.ImageData = class ImageData { constructor(data,w,h){this.data=data;this.width=w;this.height=h} };
+}
+if (typeof global.Path2D === 'undefined') {
+  global.Path2D = class Path2D { constructor(){} };
+}
 const pdf = require("pdf-parse");
-const fetch = require("node-fetch");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const { v4: uuidv4 } = require("uuid");
 dotenv.config();
 
-const AI_API_TOKEN = process.env.AI_API_TOKEN;
-if (!AI_API_TOKEN) {
-  console.error("Missing AI_API_TOKEN in environment. See .env.example");
+const API_KEY = process.env.GEMINI_API_KEY;
+if (!API_KEY) {
+  console.error("Missing GEMINI_API_KEY in environment. See .env.example");
   process.exit(1);
 }
-console.log("Using AI_API_TOKEN:", AI_API_TOKEN);
+const genAI = new GoogleGenerativeAI(API_KEY);
 
 const PORT = process.env.PORT || 5000;
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Multer setup (store to /tmp)
 const upload = multer({
   dest: path.join(process.cwd(), "tmp"),
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB max
+  limits: { fileSize: 50 * 1024 * 1024 }
 });
 
-// In-memory job store (use DB in prod)
 const JOBS = {};
 
 /* PDF extraction helper */
@@ -58,7 +58,7 @@ async function extractTextFromPdf(filePath) {
   return { text: data.text, pages, metadata: { numpages: data.numpages } };
 }
 
-/* Chunk text by maxChars */
+/* chunkText helper */
 function chunkText(text, maxChars = 3000) {
   const chunks = [];
   let start = 0;
@@ -85,17 +85,19 @@ function chunkText(text, maxChars = 3000) {
 
 /* Prompts */
 function mcqPromptFromChunk(chunk) {
-  return `Generate exactly one Multiple Choice Question (MCQ) with 4 options (A, B, C, D) and specify the correct answer from the following passage:
+  return `Generate exactly 4 distinct Multiple Choice Questions (MCQs) from the passage below. Each MCQ must have 4 options (A, B, C, D) and specify the correct answer. Number them 1..4 and label options with A) B) C) D). Use this exact format for each:
 
-Passage: ${chunk}
-
-Format:
-Question: <question_text>
+Question <n>: <question_text>
 A) <option A>
 B) <option B>
 C) <option C>
 D) <option D>
-Answer: <A|B|C|D>`;
+Answer: <A|B|C|D>
+
+Passage:
+${chunk}
+
+Return only the 4 MCQs in the format above (no extra commentary).`;
 }
 
 function laqPromptFromChunk(chunk) {
@@ -111,156 +113,269 @@ Expected points:
 - <Point 3>`;
 }
 
-/* Parse MCQ output */
+/* --- Improved parseMcqOutput --- */
 function parseMcqOutput(text) {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const result = { question: null, options: [], answer: null, raw: text };
+
   for (const line of lines) {
-    if (!result.question && line.toLowerCase().startsWith("question:")) {
-      result.question = line.replace(/^question:\s*/i, "");
-      continue;
-    }
-    const matchOpt = line.match(/^[A-D]\)\s*(.+)$/i);
+    // skip lines that are obvious separators
+    if (/^[-_]{2,}$/.test(line)) continue;
+
+    // Option lines like "A) option text" or "A. option text"
+    const matchOpt = line.match(/^([A-D])[\)\.\-]\s*(.+)$/i);
     if (matchOpt) {
-      result.options.push(matchOpt[1].trim());
+      result.options.push(matchOpt[2].trim());
       continue;
     }
-    const ansMatch = line.match(/^answer:\s*([A-D])/i);
-    if (ansMatch) result.answer = ansMatch[1].toUpperCase();
+
+    // Answer line like "Answer: C" or "Answer - C"
+    const ansMatch = line.match(/^Answer[:\s\-]*([A-D])/i);
+    if (ansMatch) {
+      result.answer = ansMatch[1].toUpperCase();
+      continue;
+    }
+
+    // If the line looks like "Question 1: ..." or "1. ..." remove the prefix
+    const qLine = line.replace(/^(?:Question\s*\d*[:\.\s-]*|Q\s*\d*[:\.\s-]*|\d+\.\s*)/i, "").trim();
+
+    // If we haven't seen a question yet, treat this line as the question
+    if (!result.question) {
+      result.question = qLine;
+      continue;
+    }
+
+    // If it's none of the above and question already set, ignore or accumulate (not necessary)
   }
+
+  // If answer present and options length is 4, set the correct text
   if (result.answer && result.options.length === 4) {
     const idx = result.answer.charCodeAt(0) - 65;
-    result.correct = result.options[idx];
+    if (idx >= 0 && idx < result.options.length) {
+      result.correct = result.options[idx];
+    }
   }
+
+  // Fallbacks: if question still not set, try to extract before the first option marker
+  if (!result.question && result.raw) {
+    // attempt to grab everything up to the first "A)" or "A." occurrence
+    const splitByOpt = result.raw.split(/(?:\nA[\)\.])/i);
+    if (splitByOpt && splitByOpt.length > 0) {
+      const candidate = splitByOpt[0].replace(/^(?:Question\s*\d*[:\.\s-]*|Q\s*\d*[:\.\s-]*)/i, "").trim();
+      if (candidate) result.question = candidate;
+    }
+  }
+
+  // Final safety: if still missing, set null (your caller can substitute placeholder)
+  if (!result.question) result.question = null;
+
   return result;
 }
 
-/* Call OpenRouter Claude model */
-async function callClaudeModel(prompt, maxTokens = 500) {
-  const url = "https://openrouter.ai/api/v1/chat/completions";
-  const headers = {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${AI_API_TOKEN}`
-  };
-  const body = {
-    model: "anthropic/claude-sonnet-4.5",
-    messages: [
-      { role: "system", content: "You are a helpful assistant that generates quiz questions from text." },
-      { role: "user", content: prompt }
-    ],
-    max_tokens: maxTokens
-  };
-
-  const resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), timeout: 120000 });
-  if (!resp.ok) {
-    const text = await resp.text();
-    const err = new Error(`Claude API error ${resp.status}: ${text}`);
-    if (resp.status === 429) err.isRateLimit = true;
+/* Gemini call */
+async function callGeminiModel(prompt) {
+  try {
+    const model = genAI.getGenerativeModel({ model: "models/gemini-2.5-flash" });
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    return response.text().trim();
+  } catch (err) {
+    console.error("Gemini API error:", err);
     throw err;
   }
-
-  const json = await resp.json();
-  return json?.choices?.[0]?.message?.content?.trim() || "";
 }
 
 /* Unified call by type */
 async function callModelByType(type, chunk) {
   if (type === "saq") {
     const prompt = `Generate a short-answer question and answer from the following text:\n\n${chunk}`;
-    const raw = await callClaudeModel(prompt, 300);
+    const raw = await callGeminiModel(prompt);
     const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     const question = lines[0] || "SAQ Question not found";
     const answer = lines.slice(1).join(" ") || "Answer not found";
     return { question, answer, raw };
   } else if (type === "mcq") {
-    const raw = await callClaudeModel(mcqPromptFromChunk(chunk), 500);
+    const raw = await callGeminiModel(mcqPromptFromChunk(chunk));
     return { raw };
   } else if (type === "laq") {
-    const raw = await callClaudeModel(laqPromptFromChunk(chunk), 700);
+    const raw = await callGeminiModel(laqPromptFromChunk(chunk));
     return { raw };
   }
   throw new Error(`Unknown type: ${type}`);
 }
 
-/* Root endpoint */
-app.get("/", (req, res) => res.send("PDF QG backend"));
+/* --- Slightly more robust generateMultipleMcqs (optional) --- */
+async function generateMultipleMcqs(chunk, n = 4) {
+  const raw = await callGeminiModel(mcqPromptFromChunk(chunk));
+  // Try splitting by explicit numbered "Question 1:" or "Question 1." or "Question:" or by blank lines
+  let blocks = raw.split(/(?:Question\s*\d+[:\.])|(?:Question\s*:)/i).map(s => s.trim()).filter(Boolean);
 
-/* POST /api/upload */
+  // If that produced nothing, fallback to splitting by double newlines
+  if (!blocks.length) {
+    blocks = raw.split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
+  }
+
+  const items = [];
+  for (let i = 0; i < Math.min(n, blocks.length); i++) {
+    const parsed = parseMcqOutput(blocks[i]);
+    parsed.raw = blocks[i];
+    items.push(parsed);
+  }
+
+  // Try to salvage additional MCQs by scanning the raw output for option groups
+  if (items.length < n) {
+    // Find all occurrences that look like a block containing A) ... D)
+    const candidateBlocks = raw.split(/(?=\n?[A-D][\)\.]\s+)/).map(s => s.trim()).filter(Boolean);
+    for (const block of candidateBlocks) {
+      if (items.length >= n) break;
+      if (items.some(it => it.raw === block)) continue;
+      const parsed = parseMcqOutput(block);
+      parsed.raw = block;
+      // ensure we at least have options or question
+      if (parsed.question || parsed.options.length) items.push(parsed);
+    }
+  }
+
+  // Pad with placeholders if still fewer than n
+  while (items.length < n) {
+    items.push({ question: null, options: [], answer: null, raw: raw });
+  }
+
+  return items.slice(0, n);
+}
+
+/* --- NEW: limited concurrency runner --- */
+async function runWithConcurrency(tasks, concurrency = 3) {
+  const results = [];
+  const queue = tasks.slice();
+  const workers = new Array(Math.max(1, concurrency)).fill(0).map(async () => {
+    while (true) {
+      const task = queue.shift();
+      if (!task) break;
+      try {
+        const r = await task();
+        results.push(r);
+      } catch (e) {
+        results.push({ error: e?.message || String(e) });
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/* Simple root */
+app.get("/", (req, res) => res.send("PDF QG backend (multi-question mode)"));
+
+/* POST /api/upload - generate 4 MCQ, 3 SAQ, 3 LAQ and return questions in response */
 app.post("/api/upload", upload.single("file"), async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: "No file uploaded" });
-  if (!file.mimetype?.includes('pdf')) { fs.unlinkSync(file.path); return res.status(400).json({ error: 'File not PDF' }); }
+  if (!file.mimetype?.includes('pdf')) {
+    if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+    return res.status(400).json({ error: 'File not PDF' });
+  }
 
   const id = uuidv4();
   JOBS[id] = { id, status: "processing", createdAt: Date.now(), questions: [] };
 
+  // Desired counts
+  const TARGET = { mcq: 4, saq: 3, laq: 3 };
+
   try {
-    const { text, pages = [], metadata } = await extractTextFromPdf(file.path);
-    const cleaned = text.replace(/\s+\n/g, "\n").replace(/\u00A0/g, " ").trim();
+    const { text } = await extractTextFromPdf(file.path);
+    const cleaned = (text || "").replace(/\s+\n/g, "\n").replace(/\u00A0/g, " ").trim();
     const chunks = chunkText(cleaned, 2500);
-    let qCounter = 0;
+    const fallbackChunk = (chunks && chunks.length > 0) ? chunks[0] : cleaned || "No content extracted";
 
-    for (const chunk of chunks) {
-      if (qCounter >= 30) break;
-
-      // MCQ
-      try {
-        const mcqOut = await callModelByType("mcq", chunk);
-        const parsed = parseMcqOutput(mcqOut.raw);
-        JOBS[id].questions.push({ id: `${id}-mcq-${qCounter}`, type: "mcq", question: parsed.question, options: parsed.options, answer: parsed.correct || parsed.answer, rawModelOutput: mcqOut.raw });
-        qCounter++;
-      } catch (err) { console.warn("MCQ error:", err.message); }
-
-      // SAQ
-      try {
-        const saqOut = await callModelByType("saq", chunk);
-        JOBS[id].questions.push({ id: `${id}-saq-${qCounter}`, type: "saq", question: saqOut.question, answer: saqOut.answer, rawModelOutput: saqOut.raw });
-        qCounter++;
-      } catch (err) { console.warn("SAQ error:", err.message); }
-
-      // LAQ
-      try {
-        const laqOut = await callModelByType("laq", chunk);
-        const laqLines = laqOut.raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-        let question = "LAQ Question not found.";
-        const expectedPoints = [];
-        let inPointsSection = false;
-
-        for (const line of laqLines) {
-          if (line.toLowerCase().startsWith("question:")) {
-            question = line.replace(/^question:\s*/i, "").trim();
-          } else if (line.toLowerCase().startsWith("expected points:")) {
-            inPointsSection = true;
-          } else if (inPointsSection && line.startsWith("-")) {
-            expectedPoints.push(line.substring(1).trim());
-          }
-        }
-
-        JOBS[id].questions.push({ id: `${id}-laq-${qCounter}`, type: "laq", question, expected_points: expectedPoints, rawModelOutput: laqOut.raw });
-        qCounter++;
-      } catch (err) { console.warn("LAQ error:", err.message); }
-
-      await new Promise(r => setTimeout(r, 300));
+    // --- 1) Batch MCQs (single call) ---
+    const mcqChunk = fallbackChunk;
+    let mcqItems = [];
+    try {
+      mcqItems = await generateMultipleMcqs(mcqChunk, TARGET.mcq);
+      mcqItems.forEach((parsed, idx) => {
+        JOBS[id].questions.push({
+          id: `${id}-mcq-${idx}`,
+          type: "mcq",
+          question: parsed.question || "MCQ question not found",
+          options: parsed.options.length === 4 ? parsed.options : parsed.options,
+          answer: parsed.correct || parsed.answer || null,
+          rawModelOutput: parsed.raw || ""
+        });
+      });
+    } catch (err) {
+      console.warn("Batch MCQ error:", err?.message || err);
+      // push placeholders for failed MCQs
+      for (let i = 0; i < TARGET.mcq; i++) {
+        JOBS[id].questions.push({
+          id: `${id}-mcq-${i}`,
+          type: "mcq",
+          error: err?.message || "MCQ generation failed"
+        });
+      }
     }
 
-    JOBS[id].status = "done";
-    JOBS[id].metadata = metadata;
-    fs.unlinkSync(file.path);
-    return res.json({ jobId: id, questions: JOBS[id].questions });
+    // --- 2) Parallel SAQs ---
+    const saqTasks = new Array(TARGET.saq).fill(0).map((_, idx) => async () => {
+      // use rotating chunks to get variety; fallback to first chunk
+      const chunk = chunks && chunks.length > 0 ? chunks[idx % chunks.length] : fallbackChunk;
+      const out = await callModelByType("saq", chunk);
+      return {
+        id: `${id}-saq-${idx}`,
+        type: "saq",
+        question: out.question,
+        answer: out.answer,
+        rawModelOutput: out.raw
+      };
+    });
 
+    const saqResults = await runWithConcurrency(saqTasks, 3); // concurrency 3
+    saqResults.forEach(r => JOBS[id].questions.push(r));
+
+    // --- 3) Parallel LAQs ---
+    const laqTasks = new Array(TARGET.laq).fill(0).map((_, idx) => async () => {
+      const chunk = chunks && chunks.length > 0 ? chunks[(idx + 1) % chunks.length] : fallbackChunk;
+      const out = await callModelByType("laq", chunk);
+      const laqLines = (out.raw || "").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const laqQuestion = laqLines[0] || "LAQ Question not found.";
+      const laqPoints = laqLines.slice(1).filter(l => l.startsWith("-")).map(l => l.substring(1).trim());
+      return {
+        id: `${id}-laq-${idx}`,
+        type: "laq",
+        question: laqQuestion,
+        answer: laqPoints,
+        rawModelOutput: out.raw
+      };
+    });
+
+    const laqResults = await runWithConcurrency(laqTasks, 2); // concurrency 2 for LAQs
+    laqResults.forEach(r => JOBS[id].questions.push(r));
+
+    // cleanup
+    if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+    JOBS[id].status = "completed";
+
+    return res.json({
+      jobId: id,
+      status: "completed",
+      questions: JOBS[id].questions
+    });
   } catch (err) {
-    JOBS[id].status = "error";
-    JOBS[id].error = String(err);
     console.error("Processing error:", err);
-    return res.status(500).json({ error: String(err) });
+    if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+    JOBS[id].status = "failed";
+    JOBS[id].error = err.message || String(err);
+    return res.status(500).json({ error: err.message || "Processing failed" });
   }
 });
 
 /* GET /api/result/:jobId */
 app.get("/api/result/:jobId", (req, res) => {
   const job = JOBS[req.params.jobId];
-  if (!job) return res.status(404).json({ error: "job not found" });
-  return res.json(job);
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  res.json(job);
 });
 
-app.listen(PORT, () => console.log(`PDF QG backend running at http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
