@@ -56,15 +56,14 @@ app.use(express.json());
 app.use(cors());
 
 const upload = multer({
-  dest: path.join(process.cwd(), "tmp"),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }
 });
 
 const JOBS = {};
 
 /* PDF extraction helper */
-async function extractTextFromPdf(filePath) {
-  const dataBuffer = fs.readFileSync(filePath);
+async function extractTextFromPdf(dataBuffer) {
   const pages = [];
   function renderPage(pageData) {
     return pageData.getTextContent().then((textContent) => {
@@ -245,7 +244,6 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: "No file uploaded" });
   if (!file.mimetype?.includes("pdf")) {
-    if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
     return res.status(400).json({ error: "File not PDF" });
   }
 
@@ -254,7 +252,7 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
   const TARGET = { mcq: 4, saq: 3, laq: 3 };
 
   try {
-    const { text } = await extractTextFromPdf(file.path);
+    const { text } = await extractTextFromPdf(file.buffer);
     const cleaned = (text || "").replace(/\s+\n/g, "\n").replace(/\u00A0/g, " ").trim();
     const chunks = chunkText(cleaned, 2500);
     const fallbackChunk = chunks.length > 0 ? chunks[0] : cleaned || "No content extracted";
@@ -296,12 +294,10 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
     const laqResults = await runWithConcurrency(laqTasks, 2);
     laqResults.forEach(r => JOBS[id].questions.push(r));
 
-    if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
     JOBS[id].status = "completed";
     return res.json({ jobId: id, status: "completed", questions: JOBS[id].questions });
 
   } catch (err) {
-    if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
     JOBS[id].status = "failed";
     JOBS[id].error = err.message || String(err);
     return res.status(500).json({ error: err.message || "Processing failed" });
