@@ -3,6 +3,14 @@
  * Node/Express backend for PDF -> Text -> Gemini QG (MCQ, SAQ, LAQ)
  * Updated: batch MCQs (1 call for 4 MCQs) + parallel SAQ/LAQ (limited concurrency)
  * LAQs now reliably generate 3 questions with fallback if model output is empty.
+ *
+ * Added: SSE streaming chat proxy endpoints:
+ *  - GET  /api/chat/stream/:chatId   (SSE client connects here)
+ *  - POST /api/chat/send             (start a model request; returns assistantMessageId)
+ *
+ * Behavior:
+ *  - If env.MODEL_STREAM_URL is set, server will stream from that URL and proxy token chunks to SSE clients.
+ *  - Otherwise it will fallback to callGeminiModel() and send the full text as a single chunk.
  */
 
 const express = require("express");
@@ -305,5 +313,191 @@ app.get("/api/result/:jobId", (req, res) => {
   if (!job) return res.status(404).json({ error: "Job not found" });
   res.json(job);
 });
+
+/* =========================
+   SSE / Chat streaming code
+   ========================= */
+
+// Map: chatId => [{ id: clientId, res: httpResponse }]
+const sseClients = new Map();
+
+// Map: chatId => [{ event, data }]
+const bufferedResponses = new Map();
+
+// Helper to send SSE event
+function sendSSE(res, event, data) {
+  try {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  } catch (e) {
+    // client might have disconnected
+    console.error('sendSSE error', e);
+  }
+}
+
+// SSE endpoint for clients to receive streaming model output for a chat
+app.get('/api/chat/stream/:chatId', (req, res) => {
+  const { chatId } = req.params;
+  // SSE headers
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.flushHeaders();
+
+  // initial hello
+  res.write('event: connected\n');
+  res.write(`data: ${JSON.stringify({ ok: true })}\n\n`);
+
+  const clientId = uuidv4();
+  const entry = { id: clientId, res };
+  if (!sseClients.has(chatId)) sseClients.set(chatId, []);
+  sseClients.get(chatId).push(entry);
+
+  // If there's a buffered response for this chat, flush it
+  if (bufferedResponses.has(chatId)) {
+    const buffer = bufferedResponses.get(chatId) || [];
+    console.log(`Flushing ${buffer.length} buffered events for chat ${chatId}`);
+    for (const { event, data } of buffer) {
+      sendSSE(res, event, data);
+    }
+    // Clear the buffer after flushing
+    bufferedResponses.delete(chatId);
+  }
+
+  // heartbeat: keep connection alive (optional)
+  const pingInterval = setInterval(() => {
+    try {
+      res.write('event: ping\n');
+      res.write(`data: ${JSON.stringify({ ts: Date.now() })}\n\n`);
+    } catch (e) {}
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(pingInterval);
+    const arr = sseClients.get(chatId) || [];
+    sseClients.set(chatId, arr.filter((c) => c.id !== clientId));
+  });
+});
+
+// POST endpoint: accept user message, return assistantMessageId and start model streaming
+app.post('/api/chat/send', async (req, res) => {
+  const { chatId, message, metadata } = req.body || {};
+  if (!chatId || !message) return res.status(400).json({ error: 'chatId and message required' });
+
+  const assistantMessageId = uuidv4();
+
+  // respond immediately so frontend can optimistic-update
+  res.json({ ok: true, assistantMessageId });
+
+  // start streaming to all SSE clients connected to this chatId
+  try {
+    await streamFromModel(message, chatId, assistantMessageId, metadata);
+  } catch (err) {
+    console.error('streamFromModel error', err);
+    const clients = sseClients.get(chatId) || [];
+    for (const { res: clientRes } of clients) {
+      sendSSE(clientRes, 'error', { assistantMessageId, message: 'Model stream error' });
+    }
+  }
+});
+
+/**
+ * streamFromModel
+ * - If process.env.MODEL_STREAM_URL is set, this tries to POST to that URL and stream its response (raw chunks) to SSE clients.
+ * - Otherwise it falls back to callGeminiModel(prompt) and sends the entire text as a single chunk + done event.
+ *
+ * NOTE: adapt parsing of chunks depending on the provider (newline-delimited JSON, SSE, raw text).
+ */
+async function streamFromModel(userMessage, chatId, assistantMessageId, metadata = {}) {
+  const clients = sseClients.get(chatId) || [];
+  const isBuffering = clients.length === 0;
+
+  if (isBuffering) {
+    console.log(`No SSE clients connected for chat ${chatId}, buffering response...`);
+    bufferedResponses.set(chatId, []);
+  }
+
+  const sendOrBuffer = (event, data) => {
+    if (isBuffering) {
+      // Don't buffer pings
+      if (event === 'ping') return;
+      bufferedResponses.get(chatId).push({ event, data });
+    } else {
+      for (const { res: clientRes } of clients) {
+        sendSSE(clientRes, event, data);
+      }
+    }
+  };
+
+  const modelStreamUrl = process.env.MODEL_STREAM_URL; // optional: provider streaming endpoint
+  const apiKey = process.env.MODEL_API_KEY || process.env.GEMINI_API_KEY;
+
+  if (modelStreamUrl) {
+    // Attempt streaming HTTP proxy
+    const controller = new AbortController();
+    const signal = controller.signal;
+    try {
+      const resp = await fetch(modelStreamUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: apiKey ? `Bearer ${apiKey}` : undefined,
+        },
+        body: JSON.stringify({
+          model: 'gemini-2.5-pro',
+          input: userMessage,
+          stream: true,
+          metadata,
+        }),
+        signal,
+      });
+
+      if (!resp.ok || !resp.body) {
+        const bodyText = await resp.text().catch(() => '');
+        throw new Error(`Model stream request failed: ${resp.status} ${bodyText}`);
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let done = false;
+
+      while (!done) {
+        const { value, done: streamDone } = await reader.read();
+        if (streamDone) {
+          done = true;
+          break;
+        }
+        const chunkText = decoder.decode(value, { stream: true });
+        sendOrBuffer('chunk', { assistantMessageId, text: chunkText });
+      }
+
+      sendOrBuffer('done', { assistantMessageId });
+
+      try {
+        reader.releaseLock();
+      } catch (e) {}
+    } catch (err) {
+      sendOrBuffer('error', { assistantMessageId, message: err?.message || 'streaming failed' });
+      if (!isBuffering) throw err; // Don't throw if we are just buffering
+    }
+  } else {
+    // Fallback: non-streaming Gemini call -> forward as single chunk
+    try {
+      const prompt = userMessage;
+      const text = await callGeminiModel(prompt); // existing helper
+      sendOrBuffer('chunk', { assistantMessageId, text });
+      sendOrBuffer('done', { assistantMessageId });
+    } catch (err) {
+      sendOrBuffer('error', { assistantMessageId, message: err?.message || 'model error' });
+      if (!isBuffering) throw err; // Don't throw if we are just buffering
+    }
+  }
+}
+
+/* =========================
+   End of SSE / Chat streaming code
+   ========================= */
 
 app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
