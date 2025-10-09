@@ -310,6 +310,145 @@ app.get("/api/result/:jobId", (req, res) => {
   res.json(job);
 });
 
+app.post("/api/youtube-suggestions", upload.single("file"), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: "No file uploaded" });
+  if (!file.mimetype?.includes("pdf")) {
+    return res.status(400).json({ error: "File not PDF" });
+  }
+
+  const YT_KEY = process.env.GEMINI_YOUTUBE_API_KEY || null; // optional
+
+  // Helper: search YouTube for a query and return first usable video or null
+  async function findAvailableYoutubeVideoForQuery(query) {
+    if (!YT_KEY) return null;
+    try {
+      const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=5&q=${encodeURIComponent(query)}&key=${YT_KEY}`;
+      const searchResp = await fetch(searchUrl);
+      if (!searchResp.ok) return null;
+      const searchJson = await searchResp.json();
+      const ids = (searchJson.items || []).map(i => i.id?.videoId).filter(Boolean);
+      if (!ids.length) return null;
+
+      // Check video status (privacy/uploadStatus)
+      const vidsUrl = `https://www.googleapis.com/youtube/v3/videos?part=status,contentDetails&id=${ids.join(",")}&key=${YT_KEY}`;
+      const vidsResp = await fetch(vidsUrl);
+      if (!vidsResp.ok) return null;
+      const vidsJson = await vidsResp.json();
+      for (const v of vidsJson.items || []) {
+        const status = v.status || {};
+        // uploadStatus may be "processed", privacyStatus should be "public"
+        if (status.privacyStatus === "public" && (status.uploadStatus === undefined || status.uploadStatus === "processed")) {
+          return { id: v.id, url: `https://www.youtube.com/watch?v=${v.id}`, status };
+        }
+      }
+      return null;
+    } catch (e) {
+      console.error("YouTube check error:", e);
+      return null;
+    }
+  }
+
+  try {
+    const { text } = await extractTextFromPdf(file.buffer);
+    const cleaned = (text || "").replace(/\s+\n/g, "\n").replace(/\u00A0/g, " ").trim();
+    const chunk = chunkText(cleaned, 4000)[0] || cleaned;
+
+    if (!chunk) {
+      return res.status(400).json({ error: "Could not extract text from PDF." });
+    }
+
+    // Prompt now asks for an optional "query" field that we can use to search YouTube reliably.
+    const prompt = `Based on the following text from a document, suggest 5 relevant YouTube video topics that would be helpful for studying this material. 
+For each topic, provide:
+- a concise, searchable title (title)
+- a brief one-line description (description)
+- a short search query optimized for YouTube (query) that will find the most relevant publicly available tutorial (e.g. "linear regression intuition 10 minutes").
+
+Return the result as a JSON array of objects like:
+[
+  { "title": "Title here", "description": "One-line", "query": "search query here" },
+  ...
+]
+
+Text:
+"${chunk}"`;
+
+    const modelResponse = await callGeminiModel(prompt);
+
+    // Extract JSON array from model output (robust match)
+    const jsonMatch = modelResponse.match(/\[\s*\{[\s\S]*\}\s*\]/);
+    if (!jsonMatch) {
+      console.warn("Model returned no JSON array; returning a fallback suggestion using simple parsing.");
+      throw new Error("No valid JSON array found in the AI model's response.");
+    }
+    const jsonResponse = jsonMatch[0];
+
+    let suggestions;
+    try {
+      suggestions = JSON.parse(jsonResponse);
+      if (!Array.isArray(suggestions)) throw new Error("Parsed suggestions not an array");
+    } catch (e) {
+      console.error("Failed to parse JSON from model response:", jsonResponse, e);
+      throw new Error("Failed to get valid suggestions from the AI model.");
+    }
+
+    // If YT key available, validate each suggestion; otherwise skip validation
+    const validated = [];
+    for (const s of suggestions) {
+      // normalize fields
+      const title = (s.title || "").toString();
+      const description = (s.description || "").toString();
+      const query = (s.query || title).toString();
+
+      if (YT_KEY) {
+        const found = await findAvailableYoutubeVideoForQuery(query);
+        if (found) {
+          validated.push({
+            title,
+            description,
+            query,
+            youtube: { id: found.id, url: found.url }
+          });
+          continue;
+        } else {
+          // try a second pass with title if query failed and title differs
+          if (query !== title) {
+            const found2 = await findAvailableYoutubeVideoForQuery(title);
+            if (found2) {
+              validated.push({
+                title,
+                description,
+                query,
+                youtube: { id: found2.id, url: found2.url }
+              });
+              continue;
+            }
+          }
+          // else: no available video for this suggestion -> drop it
+          console.log(`No available YouTube video found for suggestion: "${title}" (query: "${query}")`);
+        }
+      } else {
+        // No YT key: keep suggestion but include the query field to help client-side search/validation
+        validated.push({ title, description, query });
+      }
+    }
+
+    // If validation removed all suggestions and we have original suggestions, fallback to returning originals
+    const finalVideos = (validated.length > 0) ? validated : suggestions.map(s => ({
+      title: s.title || "",
+      description: s.description || ""
+    }));
+
+    return res.json({ videos: finalVideos });
+  } catch (err) {
+    console.error("Error getting YouTube suggestions:", err);
+    res.status(500).json({ error: err.message || "Failed to get YouTube suggestions." });
+  }
+});
+
+
+
 /* =========================
    SSE / Chat streaming code
    ========================= */
