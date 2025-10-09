@@ -21,7 +21,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 if (typeof global.DOMMatrix === "undefined") {
   global.DOMMatrix = class DOMMatrix {
-    constructor() {}
+    constructor() { }
     multiply() { return this }
     translate() { return this }
     scale() { return this }
@@ -34,7 +34,7 @@ if (typeof global.ImageData === "undefined") {
   };
 }
 if (typeof global.Path2D === "undefined") {
-  global.Path2D = class Path2D { constructor() {} };
+  global.Path2D = class Path2D { constructor() { } };
 }
 
 const pdf = require("pdf-parse");
@@ -447,8 +447,6 @@ Text:
   }
 });
 
-
-
 /* =========================
    SSE / Chat streaming code
    ========================= */
@@ -506,7 +504,7 @@ app.get('/api/chat/stream/:chatId', (req, res) => {
     try {
       res.write('event: ping\n');
       res.write(`data: ${JSON.stringify({ ts: Date.now() })}\n\n`);
-    } catch (e) {}
+    } catch (e) { }
   }, 25000);
 
   req.on('close', () => {
@@ -612,7 +610,7 @@ async function streamFromModel(userMessage, chatId, assistantMessageId, metadata
 
       try {
         reader.releaseLock();
-      } catch (e) {}
+      } catch (e) { }
     } catch (err) {
       sendOrBuffer('error', { assistantMessageId, message: err?.message || 'streaming failed' });
       if (!isBuffering) throw err; // Don't throw if we are just buffering
