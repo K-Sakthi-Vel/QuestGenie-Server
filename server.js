@@ -238,7 +238,7 @@ async function runWithConcurrency(tasks, concurrency = 3) {
 }
 
 /* Routes */
-app.get("/", (req, res) => res.send("PDF QG backend (multi-question mode)"));
+app.get("/", (req, res) => res.send("Welcome to Quest Genie Backend"));
 
 app.post("/api/upload", upload.single("file"), async (req, res) => {
   const file = req.file;
