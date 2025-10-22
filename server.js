@@ -176,16 +176,43 @@ function parseLaqOutput(raw) {
   return { question, points, rawModelOutput: raw };
 }
 
-/* Gemini call */
-async function callGeminiModel(prompt) {
-  try {
-    const model = genAI.getGenerativeModel({ model: "models/gemini-2.5-flash" });
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    return response.text().trim();
-  } catch (err) {
-    console.error("Gemini API error:", err);
-    throw err;
+/**
+ * Retries the Gemini API call with exponential backoff on transient errors (503 or 429).
+ */
+async function callGeminiModel(prompt, maxRetries = 5, initialDelay = 1000) {
+  const model = genAI.getGenerativeModel({ model: "models/gemini-2.5-flash" });
+  let delay = initialDelay;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      // 1. Wait before retrying (only on attempts 1 through maxRetries-1)
+      if (attempt > 0) {
+        console.warn(`Transient error detected. Retrying in ${delay / 1000}s (Attempt ${attempt + 1}/${maxRetries}).`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        // Exponential backoff: double the delay for the next attempt
+        delay *= 2; 
+      }
+      
+      // 2. Make the API call
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      return response.text().trim(); // Success: return result
+
+    } catch (err) {
+      // 3. Check for retriable errors (503 Service Unavailable, 429 Rate Limit)
+      // The error object from the Google Generative AI SDK contains a 'status' property.
+      const isRetriable = err.status === 503 || err.status === 429;
+
+      if (attempt < maxRetries - 1 && isRetriable) {
+        // If it's retriable and not the last attempt, the loop will continue
+        // and trigger the wait logic in the next iteration.
+        continue; 
+      } else {
+        // Log final error and re-throw if not retriable or max retries reached
+        console.error("Gemini API error after all retries or non-retriable error:", err);
+        throw err;
+      }
+    }
   }
 }
 
@@ -273,14 +300,18 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
       });
     } catch (err) {
       for (let i = 0; i < TARGET.mcq; i++) {
-        JOBS[id].questions.push({ id: `${id}-mcq-${i}`, type: "mcq", error: err?.message || "MCQ generation failed" });
+        JOBS[id].questions.push({ id: `${id}-mcq-${i}`, type: "mcq", question: "MCQ generation failed", error: err?.message || "MCQ generation failed" });
       }
     }
 
     // --- 2) SAQs ---
     const saqTasks = new Array(TARGET.saq).fill(0).map((_, idx) => async () => {
       const chunk = chunks.length > 0 ? chunks[idx % chunks.length] : fallbackChunk;
-      return await callModelByType("saq", chunk);
+      try {
+        return await callModelByType("saq", chunk);
+      } catch (e) {
+        return { question: "SAQ generation failed", answer: "SAQ generation failed", error: e?.message || "SAQ generation failed" };
+      }
     });
     const saqResults = await runWithConcurrency(saqTasks, 3);
     saqResults.forEach((r, idx) => JOBS[id].questions.push({ id: `${id}-saq-${idx}`, type: "saq", ...r }));
@@ -288,8 +319,12 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
     // --- 3) LAQs ---
     const laqTasks = new Array(TARGET.laq).fill(0).map((_, idx) => async () => {
       const chunk = chunks.length > 0 ? chunks[idx % chunks.length] : fallbackChunk;
-      const laq = await callModelByType("laq", chunk);
-      return { id: `${id}-laq-${idx}`, type: "laq", question: laq.question, answer: laq.points, rawModelOutput: laq.rawModelOutput };
+      try {
+        const laq = await callModelByType("laq", chunk);
+        return { id: `${id}-laq-${idx}`, type: "laq", question: laq.question, answer: laq.points, rawModelOutput: laq.rawModelOutput };
+      } catch (e) {
+        return { id: `${id}-laq-${idx}`, type: "laq", question: "LAQ generation failed", answer: [], error: e?.message || "LAQ generation failed" };
+      }
     });
     const laqResults = await runWithConcurrency(laqTasks, 2);
     laqResults.forEach(r => JOBS[id].questions.push(r));
