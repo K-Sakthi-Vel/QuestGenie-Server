@@ -1,0 +1,91 @@
+{
+  "jobId": "mock-quiz-job-123",
+  "status": "completed",
+  "questions": [
+    {
+      "id": "mock-quiz-job-123-mcq-0",
+      "type": "mcq",
+      "question": "Which of the following is a subfield of AI focused on enabling computers to learn from data without being explicitly programmed?",
+      "options": [
+        "Robotics",
+        "Machine Learning",
+        "Computer Graphics",
+        "Data Structures"
+      ],
+      "answer": "Machine Learning",
+      "rawModelOutput": "Question 1: Which of the following is a subfield of AI focused on enabling computers to learn from data without being explicitly programmed?\nA) Robotics\nB) Machine Learning\nC) Computer Graphics\nD) Data Structures\nAnswer: B"
+    },
+    {
+      "id": "mock-quiz-job-123-mcq-1",
+      "type": "mcq",
+      "question": "What is the value of 'x' in the equation: 2x + 5 = 15?",
+      "options": [
+        "5",
+        "10",
+        "2",
+        "7"
+      ],
+      "answer": "5",
+      "rawModelOutput": "Question 2: What is the value of 'x' in the equation: 2x + 5 = 15?\nA) 5\nB) 10\nC) 2\nD) 7\nAnswer: A"
+    },
+    {
+      "id": "mock-quiz-job-123-mcq-2",
+      "type": "mcq",
+      "question": "Which of Newton's laws states that for every action, there is an equal and opposite reaction?",
+      "options": [
+        "First Law",
+        "Second Law",
+        "Third Law",
+        "Law of Universal Gravitation"
+      ],
+      "answer": "Third Law",
+      "rawModelOutput": "Question 3: Which of Newton's laws states that for every action, there is an equal and opposite reaction?\nA) First Law\nB) Second Law\nC) Third Law\nD) Law of Universal Gravitation\nAnswer: C"
+    },
+    {
+      "id": "mock-quiz-job-123-saq-0",
+      "type": "saq",
+      "question": "What is Natural Language Processing (NLP) in AI?",
+      "answer": "Natural Language Processing (NLP) is a branch of artificial intelligence that enables computers to understand, interpret, and generate human language. It involves techniques for analyzing text and speech data to perform tasks like language translation, sentiment analysis, and chatbot interactions.",
+      "raw": "Question: What is Natural Language Processing (NLP) in AI?\nAnswer: Natural Language Processing (NLP) is a branch of artificial intelligence that enables computers to understand, interpret, and generate human language. It involves techniques for analyzing text and speech data to perform tasks like language translation, sentiment analysis, and chatbot interactions."
+    },
+    {
+      "id": "mock-quiz-job-123-saq-1",
+      "type": "saq",
+      "question": "Explain the Pythagorean theorem.",
+      "answer": "The Pythagorean theorem states that in a right-angled triangle, the square of the length of the hypotenuse (the side opposite the right angle) is equal to the sum of the squares of the lengths of the other two sides. It is commonly expressed as a² + b² = c², where 'c' is the hypotenuse and 'a' and 'b' are the other two sides.",
+      "raw": "Question: Explain the Pythagorean theorem.\nAnswer: The Pythagorean theorem states that in a right-angled triangle, the square of the length of the hypotenuse (the side opposite the right angle) is equal to the sum of the squares of the lengths of the other two sides. It is commonly expressed as a² + b² = c², where 'c' is the hypotenuse and 'a' and 'b' are the other two sides."
+    },
+    {
+      "id": "mock-quiz-job-123-saq-2",
+      "type": "saq",
+      "question": "What is the law of conservation of energy?",
+      "answer": "The law of conservation of energy states that energy cannot be created or destroyed, but can only be transformed from one form to another. The total amount of energy in an isolated system remains constant over time.",
+      "raw": "Question: What is the law of conservation of energy?\nAnswer: The law of conservation of energy states that energy cannot be created or destroyed, but can only be transformed from one form to another. The total amount of energy in an isolated system remains constant over time."
+    },
+    {
+      "id": "mock-quiz-job-123-laq-0",
+      "type": "laq",
+      "question": "Discuss the ethical considerations in the development and deployment of AI.",
+      "answer": [
+        "Bias and fairness in AI algorithms",
+        "Privacy concerns with data collection and usage",
+        "Accountability and responsibility for AI decisions",
+        "Impact on employment and societal structures",
+        "Transparency and explainability of AI models"
+      ],
+      "rawModelOutput": "Question: Discuss the ethical considerations in the development and deployment of AI.\nExpected points:\n- Bias and fairness in AI algorithms\n- Privacy concerns with data collection and usage\n- Accountability and responsibility for AI decisions\n- Impact on employment and societal structures\n- Transparency and explainability of AI models"
+    },
+    {
+      "id": "mock-quiz-job-123-laq-1",
+      "type": "laq",
+      "question": "Explain the concept of derivatives in calculus and provide a real-world application.",
+      "answer": [
+        "Definition of a derivative as the instantaneous rate of change of a function",
+        "Geometric interpretation as the slope of the tangent line to a curve",
+        "Rules for differentiation (power rule, product rule, chain rule)",
+        "Real-world application: calculating velocity from a position function, optimizing quantities (e.g., maximizing profit, minimizing cost)"
+      ],
+      "rawModelOutput": "Question: Explain the concept of derivatives in calculus and provide a real-world application.\nExpected points:\n- Definition of a derivative as the instantaneous rate of change of a function\n- Geometric interpretation as the slope of the tangent line to a curve\n- Rules for differentiation (power rule, product rule, chain rule)\n- Real-world application: calculating velocity from a position function, optimizing quantities (e.g., maximizing profit, minimizing cost)"
+    }
+  ]
+}

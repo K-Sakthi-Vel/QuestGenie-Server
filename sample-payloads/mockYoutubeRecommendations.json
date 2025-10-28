@@ -1,0 +1,94 @@
+{
+  "videos": [
+    {
+      "title": "React JS Crash Course",
+      "description": "Learn the basics of React — components, props, state, data-fetching and more — in this beginner friendly crash course.",
+      "query": "React Crash Course Traversy Media",
+      "youtube": {
+        "id": "LDB4uaJ87e0",
+        "url": "https://www.youtube.com/watch?v=LDB4uaJ87e0"
+      }
+    },
+    {
+      "title": "Node.js Full Course for Beginners | Complete All-in-One Tutorial",
+      "description": "A full beginner tutorial on Node.js covering core modules, Express, MongoDB and how to build a backend.",
+      "query": "Node.js full course beginners Dave Gray",
+      "youtube": {
+        "id": "f2EqECiTBL8",
+        "url": "https://www.youtube.com/watch?v=f2EqECiTBL8"
+      }
+    },
+    {
+      "title": "React Tutorial for Beginners",
+      "description": "Master React with this beginner-friendly tutorial covering React 18, how React works, components, state, props.",
+      "query": "React Tutorial for Beginners Programming with Mosh",
+      "youtube": {
+        "id": "SqcY0GlETPk",
+        "url": "https://www.youtube.com/watch?v=SqcY0GlETPk"
+      }
+    },
+    {
+      "title": "React JS 19 Full Course 2025 | Build an App and Master React",
+      "description": "A full crash course for beginners that covers from JSX to hooks and builds a real modern app — latest React version.",
+      "query": "React JS 19 Full Course 2025 JavaScript Mastery",
+      "youtube": {
+        "id": "dCLhUialKPQ",
+        "url": "https://www.youtube.com/watch?v=dCLhUialKPQ"
+      }
+    },
+    {
+      "title": "Node.js Crash Course",
+      "description": "An intro to Node.js core modules, building a server with http module, no frameworks — great quick overview.",
+      "query": "Node.js Crash Course Traversy Media",
+      "youtube": {
+        "id": "32M1al-Y6Ag",
+        "url": "https://www.youtube.com/watch?v=32M1al-Y6Ag"
+      }
+    },
+    {
+      "title": "Node.js and Express.js - Full Course",
+      "description": "Detailed course on Node and Express by freeCodeCamp — build REST APIs, work with Express, modules, async patterns.",
+      "query": "Node.js and Express.js full course freeCodeCamp",
+      "youtube": {
+        "id": "Oe421EPjeBE",
+        "url": "https://www.youtube.com/watch?v=Oe421EPjeBE"
+      }
+    },
+    {
+      "title": "Node JS Full Course 2024 | Complete Backend Development Course | Part 1",
+      "description": "Comprehensive backend development course with Node.js fundamentals, Express, MongoDB, APIs and more — up-to-date 2024.",
+      "query": "Node JS Full Course 2024 Sangam Mukherjee",
+      "youtube": {
+        "id": "MIJt9H69QVc",
+        "url": "https://www.youtube.com/watch?v=MIJt9H69QVc"
+      }
+    },
+    {
+      "title": "React Full Course for free ⚛️ (2024)",
+      "description": "Free React JS full course for beginners that helps you get started using React library and build simple apps.",
+      "query": "React Full Course for free 2024 Bro Code",
+      "youtube": {
+        "id": "CgkZ7MvWUAA",
+        "url": "https://www.youtube.com/watch?v=CgkZ7MvWUAA"
+      }
+    },
+    {
+      "title": "React JS crash course 2024 for beginners",
+      "description": "Very basic React JS crash course covering useState, useEffect, event handling, props, and data fetching.",
+      "query": "React JS crash course 2024 WebDevEducation",
+      "youtube": {
+        "id": "HVFSgIVXcD4",
+        "url": "https://www.youtube.com/watch?v=HVFSgIVXcD4"
+      }
+    },
+    {
+      "title": "Node.js Tutorial | Introduction to Node JS",
+      "description": "Introduction to Node.js showing installation, differences with vanilla JS, modules and core concepts — good starting point.",
+      "query": "Introduction to Node JS Dave Gray",
+      "youtube": {
+        "id": "JZXQ455OT3A",
+        "url": "https://www.youtube.com/watch?v=JZXQ455OT3A"
+      }
+    }
+  ]
+}

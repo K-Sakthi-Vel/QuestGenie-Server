@@ -20,9 +20,9 @@ const path = require("path");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // Mock data imports
-const mockQuiz = require('./../quest-genie/src/sample-payloads/mockQuiz.json');
-const mockYoutubeRecommendations = require('./../quest-genie/src/sample-payloads/mockYoutubeRecommendations.json');
-const mockChatResponse = require('./../quest-genie/src/sample-payloads/mockChatResponse.json');
+const mockQuiz = require('./sample-payloads/mockQuiz.json');
+const mockYoutubeRecommendations = require('./sample-payloads/mockYoutubeRecommendations.json');
+const mockChatResponse = require('./sample-payloads/mockChatResponse.json');
 
 if (typeof global.DOMMatrix === "undefined") {
   global.DOMMatrix = class DOMMatrix {
