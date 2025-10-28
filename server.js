@@ -19,6 +19,11 @@ const fs = require("fs");
 const path = require("path");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
+// Mock data imports
+const mockQuiz = require('./../quest-genie/src/sample-payloads/mockQuiz.json');
+const mockYoutubeRecommendations = require('./../quest-genie/src/sample-payloads/mockYoutubeRecommendations.json');
+const mockChatResponse = require('./../quest-genie/src/sample-payloads/mockChatResponse.json');
+
 if (typeof global.DOMMatrix === "undefined") {
   global.DOMMatrix = class DOMMatrix {
     constructor() { }
@@ -44,6 +49,7 @@ const { v4: uuidv4 } = require("uuid");
 dotenv.config();
 
 const API_KEY = process.env.GEMINI_API_KEY;
+
 if (!API_KEY) {
   console.error("Missing GEMINI_API_KEY in environment. See .env.example");
   process.exit(1);
@@ -267,7 +273,84 @@ async function runWithConcurrency(tasks, concurrency = 3) {
 /* Routes */
 app.get("/", (req, res) => res.send("Welcome to Quest Genie Backend"));
 
+// Mock API routes
+app.post("/api/mock-upload", upload.single("file"), async (req, res) => {
+  // Simulate processing time
+  await new Promise(resolve => setTimeout(resolve, 1000)); 
+  return res.json(mockQuiz);
+});
+
+app.post("/api/mock-youtube-suggestions", upload.single("file"), async (req, res) => {
+  // Simulate processing time
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  return res.json(mockYoutubeRecommendations);
+});
+
+app.post('/api/mock-chat/send', async (req, res) => {
+  const { chatId, message, metadata } = req.body || {};
+  if (!chatId || !message) return res.status(400).json({ error: 'chatId and message required' });
+
+  const assistantMessageId = uuidv4();
+
+  res.json({ ok: true, assistantMessageId });
+
+  // Simulate streaming mock response
+    const mockMessages = mockChatResponse.messages;
+    let mockText = "This chat uses mock replies to conserve AI billing. Please try one of the suggested messages below to see different responses!";
+
+    // Find a specific mock response based on user message
+    if (message.toLowerCase().includes("hello")) {
+      mockText = mockMessages.find(msg => msg.id === "mock-assistant-1")?.text || mockText;
+    } else if (message.toLowerCase().includes("what can you do")) {
+      mockText = mockMessages.find(msg => msg.id === "mock-assistant-2")?.text || mockText;
+    } else if (message.toLowerCase().includes("explain the quadratic formula")) {
+      mockText = mockMessages.find(msg => msg.id === "mock-assistant-3")?.text || mockText;
+    } else if (message.toLowerCase().includes("explain a basic physics concept")) {
+      mockText = mockMessages.find(msg => msg.id === "mock-assistant-4")?.text || mockText;
+    }
+
+  const clients = sseClients.get(chatId) || [];
+  const isBuffering = clients.length === 0;
+
+  if (isBuffering) {
+    console.log(`No SSE clients connected for chat ${chatId}, buffering mock response...`);
+    bufferedResponses.set(chatId, []);
+  }
+
+  const sendOrBuffer = (event, data) => {
+    if (isBuffering) {
+      if (event === 'ping') return;
+      bufferedResponses.get(chatId).push({ event, data });
+    } else {
+      for (const { res: clientRes } of clients) {
+        sendSSE(clientRes, event, data);
+      }
+    }
+  };
+
+  // Simulate chunked streaming
+  const chunks = mockText.match(/.{1,10}/g) || [mockText]; // Split into 10-char chunks
+  for (const chunk of chunks) {
+    await new Promise(resolve => setTimeout(resolve, 50)); // Simulate network delay
+    sendOrBuffer('chunk', { assistantMessageId, text: chunk });
+  }
+  sendOrBuffer('done', { assistantMessageId });
+});
+
+// The SSE endpoint for mock chat can reuse the existing /api/chat/stream/:chatId logic
+// as it handles buffering and sending to clients, which is sufficient for mock streaming.
+// No new /api/mock-chat/stream/:chatId route is strictly necessary if the client
+// can connect to the existing one and the /api/mock-chat/send handles the data.
+
 app.post("/api/upload", upload.single("file"), async (req, res) => {
+  const useMockData = req.body.useMockData; // Get useMockData from request body
+
+  if (useMockData) {
+    // Simulate processing time
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    return res.json(mockQuiz);
+  }
+
   const file = req.file;
   if (!file) return res.status(400).json({ error: "No file uploaded" });
   if (!file.mimetype?.includes("pdf")) {
@@ -346,6 +429,14 @@ app.get("/api/result/:jobId", (req, res) => {
 });
 
 app.post("/api/youtube-suggestions", upload.single("file"), async (req, res) => {
+  const useMockData = req.body.useMockData; // Get useMockData from request body
+
+  if (useMockData) {
+    // Simulate processing time
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    return res.json(mockYoutubeRecommendations);
+  }
+
   const file = req.file;
   if (!file) return res.status(400).json({ error: "No file uploaded" });
   if (!file.mimetype?.includes("pdf")) {
@@ -551,22 +642,66 @@ app.get('/api/chat/stream/:chatId', (req, res) => {
 
 // POST endpoint: accept user message, return assistantMessageId and start model streaming
 app.post('/api/chat/send', async (req, res) => {
-  const { chatId, message, metadata } = req.body || {};
+  const { chatId, message, metadata, useMockData } = req.body || {}; // Get useMockData from request body
   if (!chatId || !message) return res.status(400).json({ error: 'chatId and message required' });
 
   const assistantMessageId = uuidv4();
 
-  // respond immediately so frontend can optimistic-update
   res.json({ ok: true, assistantMessageId });
 
-  // start streaming to all SSE clients connected to this chatId
-  try {
-    await streamFromModel(message, chatId, assistantMessageId, metadata);
-  } catch (err) {
-    console.error('streamFromModel error', err);
+  if (useMockData) {
+    // Simulate streaming mock response
+    const mockMessages = mockChatResponse.messages;
+    let mockText = "This chat uses mock replies to conserve AI billing. Please try one of the suggested messages below to see different responses!";
+
+    // Find a specific mock response based on user message
+    if (message.toLowerCase().includes("hello")) {
+      mockText = mockMessages.find(msg => msg.id === "mock-assistant-1")?.text || mockText;
+    } else if (message.toLowerCase().includes("what can you do")) {
+      mockText = mockMessages.find(msg => msg.id === "mock-assistant-2")?.text || mockText;
+    } else if (message.toLowerCase().includes("explain the quadratic formula")) {
+      mockText = mockMessages.find(msg => msg.id === "mock-assistant-3")?.text || mockText;
+    } else if (message.toLowerCase().includes("explain a basic physics concept")) {
+      mockText = mockMessages.find(msg => msg.id === "mock-assistant-4")?.text || mockText;
+    }
+
     const clients = sseClients.get(chatId) || [];
-    for (const { res: clientRes } of clients) {
-      sendSSE(clientRes, 'error', { assistantMessageId, message: 'Model stream error' });
+    const isBuffering = clients.length === 0;
+
+    if (isBuffering) {
+      console.log(`No SSE clients connected for chat ${chatId}, buffering mock response...`);
+      bufferedResponses.set(chatId, []);
+    }
+
+    const sendOrBuffer = (event, data) => {
+      if (isBuffering) {
+        if (event === 'ping') return;
+        bufferedResponses.get(chatId).push({ event, data });
+      } else {
+        for (const { res: clientRes } of clients) {
+          sendSSE(clientRes, event, data);
+        }
+      }
+    };
+
+    // Simulate chunked streaming
+    const chunks = mockText.match(/.{1,10}/g) || [mockText]; // Split into 10-char chunks
+    for (const chunk of chunks) {
+      await new Promise(resolve => setTimeout(resolve, 50)); // Simulate network delay
+      sendOrBuffer('chunk', { assistantMessageId, text: chunk });
+    }
+    sendOrBuffer('done', { assistantMessageId });
+
+  } else {
+    // start streaming to all SSE clients connected to this chatId
+    try {
+      await streamFromModel(message, chatId, assistantMessageId, metadata);
+    } catch (err) {
+      console.error('streamFromModel error', err);
+      const clients = sseClients.get(chatId) || [];
+      for (const { res: clientRes } of clients) {
+        sendSSE(clientRes, 'error', { assistantMessageId, message: 'Model stream error' });
+      }
     }
   }
 });
