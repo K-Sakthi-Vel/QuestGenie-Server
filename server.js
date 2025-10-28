@@ -59,7 +59,10 @@ const genAI = new GoogleGenerativeAI(API_KEY);
 const PORT = process.env.PORT || 5000;
 const app = express();
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: 'https://quest-genie.vercel.app',
+  credentials: true,
+}));
 
 const upload = multer({
   storage: multer.memoryStorage(),
